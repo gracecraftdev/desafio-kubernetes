@@ -1,0 +1,11 @@
+# Secrets locais
+k8s/*secret*.yaml
+!k8s/*secret*.example.yaml
+
+# Arquivos de ambiente
+.env
+.env.*
+
+# Arquivos temporários
+*.tmp
+*.log
