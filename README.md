@@ -183,11 +183,7 @@ stringData:
 
 O Secret real não foi versionado e está protegido pelo `.gitignore`.
 
-Um detalhe importante nessa etapa foi a senha usada na URI de conexão.
-
-Se ela tiver caracteres reservados, como `@`, `%`, `:` ou `/`, é necessário aplicar URL encoding.
-
-Também vale lembrar que Base64 não é criptografia. Mesmo quando um Secret usa valores codificados em Base64, ele continua sendo informação sensível e não deve ser publicado no repositório.
+Um detalhe importante nessa etapa foi a senha usada na URI de conexão. Mesmo quando um Secret usa valores codificados em Base64, ele continua sendo informação sensível e não deve ser publicado no repositório.
 
 ### Evidência
 
