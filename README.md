@@ -1,59 +1,10 @@
 # Desafio — Fundamentos de Kubernetes na Prática
 
-Este repositório contém a implementação do desafio prático de fundamentos de Kubernetes.
+Este repositório reúne o que desenvolvi durante o desafio prático de Kubernetes. A proposta foi subir uma API com **PostgREST** conectada a um banco **PostgreSQL**, rodando tudo em um cluster Kubernetes local.
 
-O objetivo do projeto foi criar uma aplicação utilizando **PostgREST** integrada a um banco de dados **PostgreSQL**, executando os componentes em um cluster Kubernetes local.
+Ao longo do desafio fui adicionando os recursos por etapas: comecei com Namespace e Pod, depois configurei persistência, comunicação entre os serviços, health checks, limites de recursos e, por último, o HPA para testar o escalonamento automático da API.
 
-Durante o desafio foram utilizados recursos como:
-
-- Namespace;
-- Pods;
-- Deployments;
-- Services;
-- ConfigMaps;
-- Secrets;
-- PersistentVolumeClaims;
-- Liveness Probe;
-- Readiness Probe;
-- Requests e Limits;
-- escalabilidade horizontal;
-- Horizontal Pod Autoscaler (HPA);
-- Metrics Server.
-
----
-
-# Arquitetura
-
-A arquitetura da aplicação é composta por:
-
-```text
-Usuário
-   |
-   | HTTP
-   v
-PostgREST Service
-   |
-   v
-PostgREST Deployment
-   |
-   | SQL
-   v
-PostgreSQL Service
-   |
-   v
-PostgreSQL Deployment
-   |
-   v
-PersistentVolumeClaim
-```
-
-O PostgREST se comunica com o PostgreSQL utilizando o **nome do Service `postgres`**, e não o endereço IP do Pod.
-
-Dessa forma, a aplicação não depende de IPs individuais, que podem mudar quando Pods são recriados.
-
----
-
-# Tecnologias utilizadas
+## Tecnologias utilizadas
 
 - Kubernetes
 - Docker Desktop
@@ -61,15 +12,26 @@ Dessa forma, a aplicação não depende de IPs individuais, que podem mudar quan
 - PostgreSQL 16
 - PostgREST
 - Metrics Server
-- Horizontal Pod Autoscaler
-- Git
-- GitHub
-- WSL2
-- Ubuntu
+- HPA (Horizontal Pod Autoscaler)
+- Git e GitHub
+- WSL2 / Ubuntu
 
----
+## Arquitetura
 
-# Estrutura do projeto
+A estrutura da aplicação ficou assim:
+
+```mermaid
+flowchart TD
+    A[Usuário] -->|HTTP| B[PostgREST Service]
+    B --> C[PostgREST Deployment]
+    C -->|SQL| D[PostgreSQL Service]
+    D --> E[PostgreSQL Deployment]
+    E --> F[PersistentVolumeClaim]
+```
+
+A comunicação entre o PostgREST e o PostgreSQL é feita pelo Service `postgres`. Dessa forma, não preciso depender diretamente do IP de um Pod, que pode mudar quando ele é recriado.
+
+## Estrutura do projeto
 
 ```text
 desafio-kubernetes/
@@ -102,59 +64,38 @@ desafio-kubernetes/
 
 ---
 
-# Nível 1 — Namespace e Pod de teste
+## Nível 1 — Namespace e Pod de teste
 
-Foi criado um Namespace exclusivo para o desafio:
+Comecei criando um Namespace separado para o desafio:
 
 ```bash
 kubectl apply -f k8s/01-namespace.yaml
-```
-
-Para confirmar sua criação:
-
-```bash
 kubectl get namespaces
 ```
 
-Em seguida, foi criado um Pod de teste utilizando a imagem:
-
-```text
-nginx:alpine
-```
-
-Aplicação:
+Depois subi um Pod de teste usando `nginx:alpine`:
 
 ```bash
 kubectl apply -f k8s/02-pod-teste.yaml
-```
-
-Verificação:
-
-```bash
 kubectl get pods -n desafio-kubernetes -o wide
 ```
 
-Também foram utilizados comandos para inspecionar o Pod:
+Para conferir melhor o que estava acontecendo com o Pod, usei:
 
 ```bash
 kubectl describe pod pod-teste -n desafio-kubernetes
-```
-
-e visualizar seus logs:
-
-```bash
 kubectl logs pod-teste -n desafio-kubernetes
 ```
 
-Depois, o Pod foi excluído:
+Depois do teste, excluí o Pod:
 
 ```bash
 kubectl delete pod pod-teste -n desafio-kubernetes
 ```
 
-Como o Pod havia sido criado diretamente, sem ser gerenciado por um Deployment, ReplicaSet ou outro controlador, ele **não foi recriado automaticamente**.
+Como ele tinha sido criado diretamente, sem Deployment ou outro controlador, o Kubernetes não criou outro Pod no lugar. Esse teste ajudou a visualizar bem a diferença entre um Pod isolado e um Pod gerenciado.
 
-## Evidências
+### Evidências
 
 ![Cluster, Namespace e Pod](evidencias/01-nivel-1-cluster-namespace-pod.png)
 
@@ -164,81 +105,51 @@ Como o Pod havia sido criado diretamente, sem ser gerenciado por um Deployment, 
 
 ---
 
-# Nível 2 — PostgreSQL e persistência
+## Nível 2 — PostgreSQL e persistência
 
-Foi criado um PersistentVolumeClaim para armazenar os dados do PostgreSQL.
+Na segunda etapa configurei o PostgreSQL e o armazenamento persistente.
 
-Arquivo:
+O PVC está no arquivo:
 
 ```text
 k8s/03-postgres-pvc.yaml
 ```
 
-O PVC solicita:
+Ele solicita `1Gi` de armazenamento no modo `ReadWriteOnce`.
 
-```text
-1Gi
-```
-
-de armazenamento utilizando o modo:
-
-```text
-ReadWriteOnce
-```
-
-O PostgreSQL utiliza a imagem:
+O PostgreSQL usa a imagem:
 
 ```text
 postgres:16
 ```
 
-O volume persistente é montado em:
+O volume é montado em:
 
 ```text
 /var/lib/postgresql/data
 ```
 
-Também foi configurada a variável:
+e configurei:
 
 ```text
 PGDATA=/var/lib/postgresql/data/pgdata
 ```
 
-para utilização do diretório persistente.
+O banco fica disponível dentro do cluster por um Service `ClusterIP` na porta `5432`.
 
-O PostgreSQL é disponibilizado dentro do cluster por um Service do tipo:
+### Por que usei PVC?
 
-```text
-ClusterIP
-```
+Um `emptyDir` acompanha o ciclo de vida do Pod. Se o Pod for removido, os dados também são perdidos.
 
-na porta:
-
-```text
-5432
-```
-
-## PVC x emptyDir
-
-Um `emptyDir` existe apenas durante o ciclo de vida do Pod.
-
-Se o Pod for removido, os dados armazenados nele também são perdidos.
-
-Já um `PersistentVolumeClaim` possui um ciclo de vida independente do Pod. Dessa forma, quando o PostgreSQL é recriado, o novo Pod pode montar novamente o mesmo volume e acessar os dados existentes.
+Com o `PersistentVolumeClaim`, o armazenamento fica separado do ciclo de vida do Pod. Assim, se o PostgreSQL for recriado, o novo Pod consegue montar o volume novamente e continuar usando os dados que já estavam salvos.
 
 ---
 
-# Nível 3 — ConfigMap e Secret
+## Nível 3 — ConfigMap e Secret
 
-As configurações comuns da aplicação foram armazenadas em um ConfigMap.
+Separei as configurações comuns das informações sensíveis.
 
-Arquivo:
-
-```text
-k8s/04-configmap.yaml
-```
-
-Entre as configurações utilizadas estão:
+No ConfigMap ficaram valores como:
 
 ```text
 POSTGRES_DB
@@ -246,9 +157,7 @@ PGRST_DB_SCHEMAS
 PGRST_DB_ANON_ROLE
 ```
 
-As credenciais do banco foram armazenadas em um Secret do Kubernetes e não foram adicionadas diretamente aos Deployments.
-
-O repositório contém apenas um exemplo:
+As credenciais ficaram em um Secret. O repositório possui somente um arquivo de exemplo:
 
 ```text
 k8s/03-secret.example.yaml
@@ -272,79 +181,42 @@ stringData:
   PGRST_DB_URI: postgres://desafio_user:SUA_SENHA_URL_ENCODED@postgres:5432/desafio_db
 ```
 
-O arquivo contendo credenciais reais não deve ser versionado.
+O Secret real não foi versionado e está protegido pelo `.gitignore`.
 
-Por esse motivo, arquivos de Secret reais são ignorados pelo `.gitignore`.
+Um detalhe importante nessa etapa foi a senha usada na URI de conexão.
 
-## URL encoding
+Se ela tiver caracteres reservados, como `@`, `%`, `:` ou `/`, é necessário aplicar URL encoding.
 
-Caso a senha contenha caracteres reservados de uma URI, como `@`, `%`, `:` ou `/`, é necessário utilizar URL encoding antes de inserir a senha na string de conexão.
+Também vale lembrar que Base64 não é criptografia. Mesmo quando um Secret usa valores codificados em Base64, ele continua sendo informação sensível e não deve ser publicado no repositório.
 
-Exemplo da estrutura:
-
-```text
-postgres://desafio_user:SUA_SENHA_URL_ENCODED@postgres:5432/desafio_db
-```
-
-## Base64 não é criptografia
-
-Os valores armazenados no campo `data` de um Secret do Kubernetes utilizam Base64.
-
-Base64 é apenas uma codificação e **não representa criptografia**.
-
-Por isso, Secrets devem continuar sendo tratados como informações sensíveis e não devem ser publicados em repositórios.
-
-## Evidência
+### Evidência
 
 ![PostgreSQL, PVC, ConfigMap e Secret](evidencias/04-niveis-2-3-postgresql-configuracao.png)
 
 ---
 
-# Nível 4 — Integração PostgREST e PostgreSQL
+## Nível 4 — PostgREST + PostgreSQL
 
-Foi criado um Deployment para executar o PostgREST.
-
-Arquivo:
+Depois do banco funcionando, configurei o Deployment do PostgREST:
 
 ```text
 k8s/07-postgrest-deployment.yaml
 ```
 
-O PostgREST recebe sua string de conexão através do Secret:
+A string de conexão é recebida pelo `PGRST_DB_URI`, que vem do Secret.
 
-```text
-PGRST_DB_URI
-```
+Na URI, o hostname utilizado é `postgres`, que corresponde ao Service do PostgreSQL. Com isso, a comunicação usa o DNS interno do Kubernetes em vez do IP de um Pod.
 
-A conexão utiliza:
+### Configuração feita no PostgreSQL
 
-```text
-postgres
-```
-
-como hostname.
-
-Esse nome corresponde ao Service do PostgreSQL dentro do Kubernetes.
-
-Assim, a aplicação utiliza o DNS interno do cluster em vez de depender diretamente do IP de um Pod.
-
----
-
-## Estrutura criada no PostgreSQL
-
-Foi criada uma role para acesso da API:
+Criei uma role para o acesso da API:
 
 ```sql
 CREATE ROLE web_anon NOLOGIN;
-```
-
-A role foi associada ao usuário utilizado pela aplicação:
-
-```sql
 GRANT web_anon TO desafio_user;
 ```
 
-Também foi criada a tabela:
+Depois criei uma tabela simples para os testes:
 
 ```sql
 CREATE TABLE public.items (
@@ -353,7 +225,7 @@ CREATE TABLE public.items (
 );
 ```
 
-As permissões necessárias foram concedidas:
+E concedi as permissões necessárias:
 
 ```sql
 GRANT USAGE ON SCHEMA public TO web_anon;
@@ -367,31 +239,19 @@ ON SEQUENCE public.items_id_seq
 TO web_anon;
 ```
 
----
+### Acessando a API
 
-# Acesso à API
-
-O PostgREST é disponibilizado internamente por um Service do tipo `ClusterIP`.
-
-Para acessar a API a partir da máquina local, foi utilizado:
+O PostgREST também fica atrás de um Service `ClusterIP`. Para acessar a API pela minha máquina, usei port-forward:
 
 ```bash
 kubectl port-forward -n desafio-kubernetes svc/postgrest 3000:3000
 ```
 
-A API fica disponível localmente na porta:
+Com isso, a API ficou disponível localmente na porta `3000`.
 
-```text
-3000
-```
+### Testando a API
 
----
-
-# Testes da API
-
-## Inserção de dados
-
-Foi realizada uma requisição `POST` para inserir um registro:
+Para inserir um registro:
 
 ```bash
 curl -i -X POST http://127.0.0.1:3000/items \
@@ -400,35 +260,31 @@ curl -i -X POST http://127.0.0.1:3000/items \
   -d '{"name":"dado-persistente"}'
 ```
 
-A API retornou:
+A resposta foi:
 
 ```text
 HTTP/1.1 201 Created
 ```
 
-com o registro criado.
-
-## Consulta
-
-Para consultar os registros:
+Depois consultei os dados:
 
 ```bash
 curl -i http://127.0.0.1:3000/items
 ```
 
-O registro inserido foi retornado pela API.
+O registro criado apareceu normalmente na resposta.
 
-## Evidência
+### Evidência
 
 ![API PostgREST](evidencias/05-nivel-4-api-postgrest.png)
 
 ---
 
-# Nível 5 — Teste de persistência
+## Nível 5 — Teste de persistência
 
-Um dos principais testes do projeto foi verificar se os dados permaneceriam disponíveis mesmo após a exclusão do Pod do PostgreSQL.
+Aqui fiz um dos testes mais importantes do desafio.
 
-Primeiro, o registro foi consultado pela API:
+Primeiro confirmei que o registro estava salvo:
 
 ```json
 [
@@ -439,65 +295,45 @@ Primeiro, o registro foi consultado pela API:
 ]
 ```
 
-Em seguida, o Pod do PostgreSQL foi removido.
+Depois excluí o Pod do PostgreSQL.
 
-Como o PostgreSQL é gerenciado por um Deployment, o Kubernetes detectou que a quantidade desejada de réplicas não estava sendo atendida e criou automaticamente um novo Pod.
+Como o banco está sendo gerenciado por um Deployment, o Kubernetes percebeu que faltava uma réplica e criou outro Pod automaticamente.
 
-Depois que o novo Pod ficou disponível, a API foi consultada novamente.
+Quando o novo Pod ficou pronto, consultei a API de novo e o registro continuava lá.
 
-O mesmo registro continuava armazenado.
+Na prática, esse teste mostrou que os dados estavam no volume persistente e não presos ao Pod que eu havia excluído.
 
-Isso demonstrou que os dados não estavam associados ao ciclo de vida do Pod, mas ao PersistentVolumeClaim.
-
-## Evidência
+### Evidência
 
 ![Persistência com PVC](evidencias/06-nivel-5-persistencia-pvc.png)
 
 ---
 
-# Nível 6 — Probes, recursos e escalabilidade
+## Nível 6 — Health checks, recursos e escalabilidade
 
-O Deployment do PostgREST foi configurado inicialmente com:
+Nessa etapa deixei o PostgREST com duas réplicas:
 
 ```yaml
 replicas: 2
 ```
 
-Também foram adicionadas verificações de saúde.
+Também configurei Readiness Probe e Liveness Probe.
 
-## Readiness Probe
+### Readiness Probe
 
-A Readiness Probe verifica se o container está pronto para receber tráfego.
+A Readiness Probe verifica se o container já está pronto para receber requisições. Usei uma checagem HTTP no endpoint `/`, porta `3000`.
 
-Foi utilizada uma requisição HTTP para:
+Enquanto um Pod não estiver pronto, ele não deve receber novas requisições pelo Service.
 
-```text
-/
-```
+### Liveness Probe
 
-na porta:
+Na Liveness Probe usei uma verificação TCP na porta `3000`.
 
-```text
-3000
-```
+Ela ajuda o Kubernetes a identificar quando o container deixou de responder corretamente e precisa ser reiniciado.
 
-Se o Pod não estiver pronto, o Kubernetes deixa de encaminhar novas requisições para ele através do Service.
+### Requests e Limits
 
-## Liveness Probe
-
-A Liveness Probe verifica se o container continua funcionando.
-
-Foi utilizada uma verificação TCP na porta:
-
-```text
-3000
-```
-
-Caso a verificação falhe repetidamente, o Kubernetes pode reiniciar o container.
-
-## Requests e Limits
-
-Também foram configurados recursos de CPU e memória:
+Configurei CPU e memória:
 
 ```yaml
 resources:
@@ -509,242 +345,179 @@ resources:
     memory: "128Mi"
 ```
 
-Os `requests` indicam os recursos necessários para o agendamento do Pod.
+Os `requests` representam os recursos considerados no agendamento do Pod, enquanto os `limits` definem o limite de uso do container.
 
-Os `limits` estabelecem o máximo de recursos que o container pode utilizar.
+O `requests.cpu` também foi importante para o HPA, já que a porcentagem de utilização de CPU é calculada usando esse valor como referência.
 
-A definição de `requests.cpu` também permite que o HPA calcule posteriormente a utilização percentual de CPU.
+### Escalabilidade
 
-## Escalabilidade
+Com duas réplicas do PostgREST, o Service consegue encaminhar requisições para mais de um Pod.
 
-Com duas réplicas do PostgREST, o Service possui múltiplos endpoints disponíveis.
+Nesse caso faz sentido escalar a API horizontalmente porque ela é stateless.
 
-Isso permite distribuir as requisições entre diferentes Pods.
+Para o PostgreSQL a situação é diferente. Como ele utiliza armazenamento persistente com PVC `ReadWriteOnce`, simplesmente aumentar o número de réplicas não seria suficiente. Seria necessário pensar também em replicação do banco e na estratégia de armazenamento.
 
-A API pode ser escalada horizontalmente porque é um componente stateless.
-
-Já o PostgreSQL utiliza armazenamento persistente com PVC `ReadWriteOnce`, portanto aumentar suas réplicas da mesma forma exigiria uma estratégia própria para banco de dados, replicação e armazenamento compartilhado.
-
-## Evidência
+### Evidência
 
 ![Health Checks, recursos e scaling](evidencias/07-nivel-6-health-recursos-scaling.png)
 
 ---
 
-# Nível 7 — Horizontal Pod Autoscaler (HPA)
+## Nível 7 — Horizontal Pod Autoscaler
 
-Como etapa bônus, foi configurado o escalonamento horizontal automático do PostgREST com base no consumo de CPU.
+Como etapa bônus, configurei o HPA para alterar automaticamente a quantidade de Pods do PostgREST de acordo com o consumo de CPU.
 
-## Metrics Server
+### Metrics Server
 
-O HPA precisa de métricas para tomar decisões de escalabilidade.
+Para o HPA funcionar, primeiro precisei instalar o Metrics Server.
 
-Para isso, foi instalado o Metrics Server no cluster.
+Foi nessa parte que encontrei um problema: depois da instalação, o Metrics Server não conseguia validar o certificado TLS do kubelet no meu ambiente local. O erro indicava que o certificado não possuía o IP do node nos SANs.
 
-Após a instalação inicial, o Metrics Server apresentou um erro relacionado à validação do certificado TLS do kubelet no ambiente Kubernetes local.
-
-O erro indicava que o certificado não continha o IP do node nos SANs.
-
-Como se trata de um ambiente local de laboratório, foi adicionada ao Metrics Server a opção:
+Como era um cluster local de laboratório, ajustei o Metrics Server usando:
 
 ```text
 --kubelet-insecure-tls
 ```
 
-Após a alteração, o Pod do Metrics Server ficou:
-
-```text
-1/1 Running
-```
-
-e as métricas passaram a ficar disponíveis.
-
-A coleta foi validada utilizando:
+Depois da alteração, o Pod ficou `1/1 Running` e consegui consultar as métricas:
 
 ```bash
 kubectl top nodes
 kubectl top pods -n desafio-kubernetes
 ```
 
----
+Esse foi um dos pontos do desafio em que precisei fazer troubleshooting em vez de apenas aplicar os manifests.
 
-## Configuração do HPA
+### Configuração do HPA
 
-O HPA está definido no arquivo:
+O HPA está em:
 
 ```text
 k8s/09-postgrest-hpa.yaml
 ```
 
-A configuração utiliza:
+A configuração permite entre 2 e 5 réplicas:
 
 ```yaml
 minReplicas: 2
 maxReplicas: 5
 ```
 
-e possui como alvo:
+com alvo médio de CPU de:
 
 ```yaml
 averageUtilization: 50
 ```
 
-Isso significa que o Kubernetes monitora a utilização média de CPU do Deployment do PostgREST e pode ajustar automaticamente a quantidade de réplicas entre 2 e 5.
-
-O HPA foi aplicado com:
+Apliquei com:
 
 ```bash
 kubectl apply -f k8s/09-postgrest-hpa.yaml
 ```
 
-Inicialmente, com a aplicação sem carga significativa, foi observado:
+Sem carga significativa, o HPA mostrava aproximadamente:
 
 ```text
 cpu: 4%/50%
 ```
 
-com:
+e o Deployment permanecia com 2 réplicas.
 
-```text
-2 réplicas
-```
+### Teste de carga
 
----
-
-## Teste de carga
-
-Para testar o HPA, foi criado temporariamente um Pod chamado `load-generator`.
-
-Ele realizou múltiplas requisições continuamente para:
+Para ver o HPA funcionando de verdade, criei temporariamente um Pod `load-generator` fazendo várias requisições para:
 
 ```text
 http://postgrest:3000/items
 ```
 
-Durante o teste, o consumo de CPU aumentou significativamente.
-
-O HPA registrou:
+Durante o teste, o HPA chegou a registrar:
 
 ```text
 cpu: 375%/50%
 ```
 
-e aumentou automaticamente o número de réplicas do PostgREST.
+Com o aumento de CPU, o Kubernetes escalou o PostgREST de **2 para 5 réplicas**.
 
-O Deployment passou de:
-
-```text
-2 réplicas
-```
-
-para:
-
-```text
-5 réplicas
-```
-
-O resultado observado foi:
+O Deployment chegou ao estado:
 
 ```text
 READY   UP-TO-DATE   AVAILABLE
 5/5     5            5
 ```
 
-e os cinco Pods estavam em estado:
+e os cinco Pods ficaram `1/1 Running`.
 
-```text
-1/1 Running
-```
-
-Isso confirmou o funcionamento do **Horizontal Pod Autoscaler baseado em CPU**.
-
-Após o teste, o Pod utilizado para gerar a carga foi removido:
+Depois do teste removi o gerador de carga:
 
 ```bash
 kubectl delete pod load-generator -n desafio-kubernetes
 ```
 
-## Evidência
+### Evidência
 
 ![Horizontal Pod Autoscaler](evidencias/09-nivel-7-hpa.png)
 
 ---
 
-# Estado final do cluster
+## Estado final do cluster
 
-Antes do teste bônus de HPA, foi registrado o estado dos principais recursos do projeto utilizando:
+Antes do teste de carga do HPA, registrei o estado dos recursos com:
 
 ```bash
 kubectl get all -n desafio-kubernetes
 ```
 
-O resultado confirmou:
+Nesse momento o ambiente estava com:
 
-- PostgreSQL com `1/1` Pod em execução;
-- PostgREST com `2/2` réplicas disponíveis;
+- PostgreSQL com 1 Pod;
+- PostgREST com 2 réplicas;
 - Services `postgres` e `postgrest`;
-- Deployments disponíveis;
-- ReplicaSets responsáveis pelo gerenciamento dos Pods.
+- Deployments e ReplicaSets funcionando.
 
 ![Estado final do Kubernetes](evidencias/08-estado-final-kubernetes.png)
 
-Posteriormente, durante o teste do Nível 7, o HPA aumentou temporariamente o PostgREST para 5 réplicas em resposta à carga gerada.
+No teste do nível 7, o HPA aumentou temporariamente o PostgREST para 5 réplicas por causa da carga gerada.
 
 ---
 
-# Ordem de aplicação dos manifests
+## Como aplicar os manifests
 
-Os principais manifests podem ser aplicados na seguinte ordem:
+Os principais arquivos podem ser aplicados nesta ordem:
 
 ```bash
 kubectl apply -f k8s/01-namespace.yaml
-
 kubectl apply -f k8s/03-postgres-pvc.yaml
-
 kubectl apply -f k8s/04-configmap.yaml
-
 kubectl apply -f k8s/05-postgres-deployment.yaml
-
 kubectl apply -f k8s/06-postgres-service.yaml
-
 kubectl apply -f k8s/07-postgrest-deployment.yaml
-
 kubectl apply -f k8s/08-postgrest-service.yaml
-
 kubectl apply -f k8s/09-postgrest-hpa.yaml
 ```
 
-O Secret com as credenciais reais deve ser criado separadamente antes dos Deployments que dependem dele.
+> O Secret real precisa ser criado antes dos Deployments que dependem dele. O arquivo `03-secret.example.yaml` é apenas um modelo e não possui as credenciais utilizadas no ambiente.
 
-O arquivo `03-secret.example.yaml` serve apenas como referência e não contém credenciais reais.
+## Comandos úteis
 
----
-
-# Verificação dos recursos
-
-Alguns comandos úteis utilizados durante o desafio:
+Alguns comandos que usei bastante durante o desafio:
 
 ```bash
 kubectl get all -n desafio-kubernetes
-
 kubectl get pods -n desafio-kubernetes
-
 kubectl get services -n desafio-kubernetes
-
 kubectl get pvc -n desafio-kubernetes
-
 kubectl get hpa -n desafio-kubernetes
-
 kubectl top pods -n desafio-kubernetes
 ```
 
-Para visualizar detalhes de um recurso:
+Para investigar um Pod:
 
 ```bash
 kubectl describe pod <nome-do-pod> -n desafio-kubernetes
 ```
 
-Para visualizar logs:
+Para consultar os logs:
 
 ```bash
 kubectl logs <nome-do-pod> -n desafio-kubernetes
@@ -752,97 +525,47 @@ kubectl logs <nome-do-pod> -n desafio-kubernetes
 
 ---
 
-# Segurança
+## Segurança
 
-As credenciais reais utilizadas durante o desafio não são armazenadas no repositório.
+As credenciais reais não ficam no repositório.
 
-O `.gitignore` impede o versionamento de arquivos locais contendo Secrets.
-
-O repositório disponibiliza apenas:
+O projeto disponibiliza somente:
 
 ```text
 k8s/03-secret.example.yaml
 ```
 
-com valores fictícios.
+com valores fictícios. Os arquivos locais usados para armazenar os Secrets reais são ignorados pelo `.gitignore`.
 
-Antes de realizar commits, é importante verificar se nenhuma credencial foi adicionada acidentalmente ao projeto.
-
----
-
-# Versionamento com Git
-
-O projeto foi versionado em etapas lógicas durante o desenvolvimento.
-
-Exemplos de etapas versionadas:
-
-- criação do Namespace e Pod de teste;
-- configuração do PostgreSQL e armazenamento persistente;
-- integração com PostgREST;
-- teste de persistência;
-- configuração de health checks e recursos;
-- escalabilidade da API;
-- configuração do HPA;
-- documentação e evidências.
-
-Comandos utilizados:
-
-```bash
-git status
-git add .
-git commit -m "mensagem do commit"
-git push
-```
+Antes dos commits, também é importante conferir o `git status` e garantir que nenhuma credencial entrou no versionamento por engano.
 
 ---
 
-# Principais conceitos praticados
+## O que pratiquei neste desafio
 
-Durante o desenvolvimento deste desafio foram praticados:
+Durante o projeto trabalhei principalmente com:
 
-- Namespace;
-- Pods;
-- Deployments;
-- ReplicaSets;
-- Services;
-- ClusterIP;
-- DNS interno do Kubernetes;
-- ConfigMaps;
-- Secrets;
+- Namespace, Pods, Deployments e ReplicaSets;
+- Services e DNS interno do Kubernetes;
+- ConfigMaps e Secrets;
 - PersistentVolumeClaims;
-- armazenamento persistente;
-- ciclo de vida de Pods;
-- integração entre aplicações;
-- PostgREST;
-- PostgreSQL;
-- Liveness Probe;
-- Readiness Probe;
-- Requests e Limits;
+- persistência de dados;
+- comunicação entre PostgREST e PostgreSQL;
+- Liveness e Readiness Probes;
+- requests e limits;
 - escalabilidade horizontal;
-- Horizontal Pod Autoscaler (HPA);
-- Metrics Server;
+- HPA e Metrics Server;
 - métricas de CPU;
 - geração de carga;
-- EndpointSlices;
 - troubleshooting;
-- versionamento com Git.
+- Git e GitHub.
 
----
+## Conclusão
 
-# Conclusão
+Esse desafio foi importante para sair um pouco da parte teórica e entender melhor o que acontece com uma aplicação rodando no Kubernetes.
 
-O desafio permitiu aplicar na prática os principais fundamentos do Kubernetes.
+Além de criar os manifests, consegui testar situações que ajudaram a visualizar melhor o funcionamento do cluster. Excluí Pods para observar o comportamento dos Deployments, validei a persistência dos dados do PostgreSQL, testei a comunicação da API com o banco e configurei as probes e os recursos do PostgREST.
 
-A aplicação foi dividida em componentes independentes, utilizando Services para comunicação interna e evitando dependência direta dos IPs dos Pods.
+A parte do HPA também foi interessante porque não funcionou tudo de primeira. Precisei resolver o problema do Metrics Server no ambiente local e, depois disso, consegui gerar carga e acompanhar o PostgREST aumentando de 2 para 5 réplicas automaticamente.
 
-O PostgreSQL utiliza armazenamento persistente por meio de um PVC, permitindo que os dados continuem disponíveis mesmo após a exclusão e recriação do Pod.
-
-As credenciais foram separadas das configurações comuns utilizando Secret e ConfigMap.
-
-O PostgREST foi configurado com health checks, gerenciamento de recursos e múltiplas réplicas, permitindo observar conceitos relacionados à disponibilidade e escalabilidade.
-
-Também foi configurado um Horizontal Pod Autoscaler baseado em CPU. Durante o teste de carga, o HPA aumentou automaticamente o PostgREST de 2 para 5 réplicas, demonstrando o escalonamento horizontal da aplicação em resposta ao aumento de utilização.
-
-Além da criação dos recursos, foram realizados testes de integração, comunicação entre os componentes, exclusão e recriação de Pods, persistência de dados, health checks, coleta de métricas e escalabilidade automática.
-
-Com isso, o projeto demonstra na prática o funcionamento dos principais recursos utilizados para executar e gerenciar uma aplicação no Kubernetes.
+No final, o desafio me ajudou a entender melhor não só como criar os recursos do Kubernetes, mas também como verificar o que está acontecendo no cluster e investigar problemas quando alguma coisa não funciona como esperado.
